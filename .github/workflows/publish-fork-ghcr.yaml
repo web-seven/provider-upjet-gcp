@@ -66,13 +66,16 @@ jobs:
           SUBPACKAGES: ${{ github.event.inputs.subpackages }}
           SIZE: ${{ github.event.inputs.size || '5' }}
         run: |
-          python3 - <<'PY' >> "$GITHUB_OUTPUT"
+          python3 - <<'PY'
           import json, os
           pkgs = (os.environ["SUBPACKAGES"] or os.environ["DEFAULT_SUBPACKAGES"]).split()
           size = int(os.environ["SIZE"] or "5")
           chunks = [" ".join(pkgs[i:i + size]) for i in range(0, len(pkgs), size)]
-          print("chunks=" + json.dumps(chunks))
-          print(f"{len(pkgs)} packages in {len(chunks)} chunks: {chunks}")
+          with open(os.environ["GITHUB_OUTPUT"], "a") as out:
+              out.write("chunks=" + json.dumps(chunks) + "\n")
+          print(f"{len(pkgs)} packages in {len(chunks)} chunks:")
+          for c in chunks:
+              print("  " + c)
           PY
 
   publish:
