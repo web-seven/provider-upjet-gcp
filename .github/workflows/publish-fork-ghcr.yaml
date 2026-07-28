@@ -12,8 +12,12 @@ on:
         required: true
       subpackages:
         description: 'Subpackages to build, space separated (config is the family package)'
-        default: 'config cloudplatform sql'
-        required: true
+        default: ''
+        required: false
+      size:
+        description: 'Packages per build job'
+        default: '5'
+        required: false
       platforms:
         description: 'Platforms to build for'
         default: 'linux_amd64'
@@ -31,14 +35,58 @@ permissions:
   contents: read
   packages: write
 
+env:
+  # the family packages installed in our clusters; keep in sync with the
+  # providers listed by `kubectl get providers.pkg.crossplane.io`
+  DEFAULT_SUBPACKAGES: >-
+    config
+    artifact
+    bigquery
+    certificatemanager
+    cloudplatform
+    cloudrun
+    cloudscheduler
+    compute
+    container
+    dns
+    monitoring
+    secretmanager
+    servicenetworking
+    sql
+
 jobs:
-  publish:
+  plan:
     runs-on: ubuntu-latest
+    outputs:
+      chunks: ${{ steps.split.outputs.chunks }}
+    steps:
+      - name: Split subpackages into build chunks
+        id: split
+        env:
+          SUBPACKAGES: ${{ github.event.inputs.subpackages }}
+          SIZE: ${{ github.event.inputs.size || '5' }}
+        run: |
+          python3 - <<'PY' >> "$GITHUB_OUTPUT"
+          import json, os
+          pkgs = (os.environ["SUBPACKAGES"] or os.environ["DEFAULT_SUBPACKAGES"]).split()
+          size = int(os.environ["SIZE"] or "5")
+          chunks = [" ".join(pkgs[i:i + size]) for i in range(0, len(pkgs), size)]
+          print("chunks=" + json.dumps(chunks))
+          print(f"{len(pkgs)} packages in {len(chunks)} chunks: {chunks}")
+          PY
+
+  publish:
+    needs: plan
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        chunk: ${{ fromJSON(needs.plan.outputs.chunks) }}
     env:
       REGORG: ghcr.io/${{ github.repository_owner }}
       # on a tag push the inputs are empty, so fall back to the tag name / defaults
       PKG_VERSION: ${{ github.event.inputs.version || github.ref_name }}
-      PKG_SUBPACKAGES: ${{ github.event.inputs.subpackages || 'config cloudplatform sql' }}
+      PKG_SUBPACKAGES: ${{ matrix.chunk }}
       PKG_PLATFORMS: ${{ github.event.inputs.platforms || 'linux_amd64' }}
       PKG_CONCURRENCY: ${{ github.event.inputs.concurrency || '2' }}
       GO_VERSION: ${{ github.event.inputs.go_version || '1.25.11' }}
@@ -96,8 +144,10 @@ jobs:
         uses: actions/cache@d4323d4df104b026a6aa633fdb11d772146be0bf # v4
         with:
           path: ${{ steps.go_cache.outputs.cache }}
-          key: ${{ runner.os }}-build-publish-fork-${{ hashFiles('**/go.sum') }}
-          restore-keys: ${{ runner.os }}-build-publish-fork-
+          key: ${{ runner.os }}-build-publish-fork-${{ strategy.job-index }}-${{ hashFiles('**/go.sum') }}
+          restore-keys: |
+            ${{ runner.os }}-build-publish-fork-${{ strategy.job-index }}-
+            ${{ runner.os }}-build-publish-fork-
 
       - name: Cache Go Dependencies
         uses: actions/cache@d4323d4df104b026a6aa633fdb11d772146be0bf # v4
